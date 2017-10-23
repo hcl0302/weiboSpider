@@ -95,6 +95,10 @@ class Weibo:
                 page_num = (int)(selector.xpath(
                     "//input[@name='mp']")[0].attrib["value"])
             pattern = r"\d+\.?\d*"
+            pattern_full_article = re.compile(r'/comment/',re.I)
+            pattern_one_image = re.compile(r'^http://weibo.cn/mblog/oripic',re.I)
+            pattern_all_image = re.compile(r'^http://weibo.cn/mblog/picAll',re.I)
+            pattern_one_image2 = re.compile(r'^/mblog/oripic',re.I)
             #for page in range(1, page_num + 1):
             for page in range(1, 2):
                 print "downloading page: %d" % (page)
@@ -106,17 +110,26 @@ class Weibo:
                 if len(info) > 3:
                     for i in range(0, len(info) - 2):
                         # 微博内容
-                        str_t = info[i].xpath("div/span[@class='ctt']")
-                        weibo_content = str_t[0].xpath("string(.)").encode(
-                            "utf-8", "ignore").decode(
-                            "utf-8")
-                        self.weibo_content.append(weibo_content)
+                        spans = info[i].xpath("div/span[@class='ctt']")
+                        span_links = spans[0].xpath("a/@href")
+                        if len(span_links) > 0 and pattern_full_article.match(span_links[len(span_links)-1]):
+                            article_link = "http://weibo.cn" + span_links[len(span_links)-1]
+                            article_html = requests.get(article_link, cookies=self.cookie).content
+                            article_selector = etree.HTML(article_html)
+                            article = article_selector.xpath("//div[@id='M_']/div/span[@class='ctt']")
+                            weibo_content = article[0].xpath("string(.)").encode(
+                                "utf-8", "ignore").decode(
+                                "utf-8")
+                            self.weibo_content.append(weibo_content)
+                        else:
+                            weibo_content = spans[0].xpath("string(.)").encode(
+                                "utf-8", "ignore").decode(
+                                "utf-8")
+                            self.weibo_content.append(weibo_content)
                         #print (u"weibo content：" + weibo_content).encode("utf-8")
 
                         #images
                         links = info[i].xpath("div/a/@href")
-                        pattern_one_image = re.compile(r'^http://weibo.cn/mblog/oripic',re.I)
-                        pattern_all_image = re.compile(r'^http://weibo.cn/mblog/picAll',re.I)
                         image_links = []
                         for link in links:
                             if pattern_all_image.match(link):
@@ -124,7 +137,6 @@ class Weibo:
                                 image_html = requests.get(link, cookies=self.cookie).content
                                 image_selector = etree.HTML(image_html)
                                 sublinks = image_selector.xpath("//div/a/@href")
-                                pattern_one_image2 = re.compile(r'^/mblog/oripic',re.I)
                                 for sublink in sublinks:
                                     if pattern_one_image2.match(sublink):
                                         image_links.append("http://weibo.cn" + sublink)
