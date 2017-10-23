@@ -9,6 +9,7 @@ import traceback
 from datetime import datetime
 from datetime import timedelta
 from lxml import etree
+import time
 
 
 class Weibo:
@@ -21,9 +22,12 @@ class Weibo:
         self.username = ''  # 用户名，如“Dear-迪丽热巴”
         self.weibo_num = 0  # 用户全部微博数
         self.weibo_num2 = 0  # 爬取到的微博数
+        self.image_num = 0
         self.following = 0  # 用户关注数
         self.followers = 0  # 用户粉丝数
         self.weibo_content = []  # 微博内容
+        self.weibo_image_count = []
+        self.weibo_image_links = []
         self.weibo_reason = [] #微博转发原因
         self.publish_time = []  # 微博发布时间
         self.up_num = []  # 微博对应的点赞数
@@ -93,6 +97,7 @@ class Weibo:
             pattern = r"\d+\.?\d*"
             #for page in range(1, page_num + 1):
             for page in range(1, 2):
+                print "downloading page: %d" % (page)
                 url2 = "https://weibo.cn/u/%d?filter=%d&page=%d" % (
                     self.user_id, self.filter, page)
                 html2 = requests.get(url2, cookies=self.cookie).content
@@ -106,7 +111,29 @@ class Weibo:
                             "utf-8", "ignore").decode(
                             "utf-8")
                         self.weibo_content.append(weibo_content)
-                        print (u"weibo content：" + weibo_content).encode("utf-8")
+                        #print (u"weibo content：" + weibo_content).encode("utf-8")
+
+                        #images
+                        links = info[i].xpath("div/a/@href")
+                        pattern_one_image = re.compile(r'^http://weibo.cn/mblog/oripic',re.I)
+                        pattern_all_image = re.compile(r'^http://weibo.cn/mblog/picAll',re.I)
+                        image_links = []
+                        for link in links:
+                            if pattern_all_image.match(link):
+                                image_links = []
+                                image_html = requests.get(link, cookies=self.cookie).content
+                                image_selector = etree.HTML(image_html)
+                                sublinks = image_selector.xpath("//div/a/@href")
+                                pattern_one_image2 = re.compile(r'^/mblog/oripic',re.I)
+                                for sublink in sublinks:
+                                    if pattern_one_image2.match(sublink):
+                                        image_links.append("http://weibo.cn" + sublink)
+                                break
+                            elif pattern_one_image.match(link):
+                                image_links.append(link)
+                        self.weibo_image_count.append(len(image_links))
+                        if len(image_links) > 0:
+                            self.weibo_image_links = self.weibo_image_links + image_links
 
                         # 微博发布时间
                         str_time = info[i].xpath("div/span[@class='ct']")
@@ -125,15 +152,15 @@ class Weibo:
                                 "%Y-%m-%d %H:%M")
                         elif u"今天" in publish_time:
                             today = datetime.now().strftime("%Y-%m-%d")
-                            time = publish_time[3:]
-                            publish_time = today + " " + time
+                            current_time = publish_time[3:]
+                            publish_time = today + " " + current_time
                         elif u"月" in publish_time:
                             year = datetime.now().strftime("%Y")
                             month = publish_time[0:2]
                             day = publish_time[3:5]
-                            time = publish_time[7:12]
+                            hour = publish_time[7:12]
                             publish_time = (
-                                year + "-" + month + "-" + day + " " + time)
+                                year + "-" + month + "-" + day + " " + hour)
                         else:
                             publish_time = publish_time[:16]
                         self.publish_time.append(publish_time)
@@ -161,6 +188,8 @@ class Weibo:
                         #print "comment num: " + str(comment_num)
 
                         self.weibo_num2 += 1
+                print "Sleep for 5 seconds before accessing next page. Please wait..."
+                time.sleep(5)
 
             if not self.filter:
                 print "total webo number: " + str(self.weibo_num2)
@@ -176,24 +205,30 @@ class Weibo:
     def write_txt(self):
         try:
             if self.filter:
-                result_header = "\n\nOriginal Weibo Content： \n"
+                result_header = u"\n\nOriginal Weibo Content： \n"
             else:
                 result_header = u"\n\nWeibo Content：\n"
             result = (u"User Info\nusername：" + self.username +
                       u"\nuserid:" + str(self.user_id) +
                       u"\nweibo num:" + str(self.weibo_num) +
                       u"\nfollowings:" + str(self.following) +
-                      u"\nfollowers" + str(self.followers) +
+                      u"\nfollowers:" + str(self.followers) +
                       result_header
                       )
+            image_link_index = 0
             for i in range(1, self.weibo_num2 + 1):
                 text = (str(i) + ":" + self.weibo_content[i - 1] + "\n" +
+                        u"images count: " + str(self.weibo_image_count[i-1]) + "\n"
                         u"publish time：" + self.publish_time[i - 1] + "\n" +
                         u"up num：" + str(self.up_num[i - 1]) +
                         u"   retweet num：" + str(self.retweet_num[i - 1]) +
                         u"   comment num：" + str(self.comment_num[i - 1]) + "\n\n"
                         )
-                result = result + text
+                image_info = ""
+                for j in range(0, self.weibo_image_count[i-1]):
+                    image_info = image_info + self.weibo_image_links[image_link_index] + "\n"
+                    image_link_index += 1
+                result = result + text + image_info
             file_dir = os.path.split(os.path.realpath(__file__))[
                 0] + os.sep + "weibo"
             if not os.path.isdir(file_dir):
@@ -228,7 +263,7 @@ def main():
         wb = Weibo(user_id, filter)  # 调用Weibo类，创建微博实例wb
         wb.start()  # 爬取微博信息
         print (u"username:" + wb.username).encode("utf-8")
-        print "weibo num:" + str(wb.weibo_num)
+        print "Saved weibo num:" + str(wb.weibo_num2)
     except Exception, e:
         print "Error: ", e
         traceback.print_exc()
