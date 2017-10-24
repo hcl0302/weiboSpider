@@ -59,6 +59,7 @@ input:focus {
   text-decoration: none;
   background-color: #28a8e0;
   height:30px;
+  margin-right: 10px;
 }
 .sort:hover {
   text-decoration: none;

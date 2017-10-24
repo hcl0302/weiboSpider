@@ -11,6 +11,7 @@ from datetime import timedelta
 from lxml import etree
 import time
 import shutil
+from distutils.dir_util import copy_tree
 
 
 class Weibo:
@@ -218,37 +219,55 @@ class Weibo:
     # 将爬取的信息写入文件
     def write_txt(self):
         try:
-            if self.filter:
-                result_header = u"\n\nOriginal Weibo Content： \n"
-            else:
-                result_header = u"\n\nWeibo Content：\n"
-            result = (u"User Info\nusername：" + self.username +
-                      u"\nuserid:" + str(self.user_id) +
-                      u"\nweibo num:" + str(self.weibo_num) +
-                      u"\nfollowings:" + str(self.following) +
-                      u"\nfollowers:" + str(self.followers) +
-                      result_header
+            result_header = '''
+            <!DOCTYPE html><html><head><link rel="stylesheet" type="text/css" href="css/lightbox.css">
+            <link rel="stylesheet" type="text/css" href="css/style.css"><meta charset="UTF-8">
+            <title>Weibo Backup</title></head><body>
+            '''
+
+            result_header = result_header + (u"<h1 style='text-align: center'>" + self.username + "</h1>" +
+                      u"<p class='mycenter'><span>userid: " + str(self.user_id) +
+                      u"</span><span>weibo num: " + str(self.weibo_num) +
+                      u"</span><span>followings: " + str(self.following) +
+                      u"</span><span>followers: " + str(self.followers) +
+                      "</span></p><br>"
                       )
+            result_header = result_header + '''
+                <div id="hacker-list"><p class="mycenter"><input class="search" placeholder="Search by keyword or date" /></p><p class="mycenter">
+                <button class="sort" data-sort="date">Sort by date</button><button class="sort" data-sort="upCount">Sort by up count</button>
+                <button class="sort" data-sort="retweetCount">Sort by retweet count</button>
+                <button class="sort" data-sort="commentCount">Sort by comment cout</button></p>
+                <br><h3 id="weiboCount"></h3><h3 id="matchCount"></h3><ul class="list">
+            '''
             image_link_index = 1
+            result = ""
             for i in range(1, self.weibo_num2 + 1):
-                text = (str(i) + ":" + self.weibo_content[i - 1] + "\n" +
-                        u"images count: " + str(self.weibo_image_count[i-1]) + "\n"
-                        u"publish time：" + self.publish_time[i - 1] + "\n" +
-                        u"up num：" + str(self.up_num[i - 1]) +
-                        u"   retweet num：" + str(self.retweet_num[i - 1]) +
-                        u"   comment num：" + str(self.comment_num[i - 1]) + "\n\n"
-                        )
-                image_info = "images: "
+                text_head = (u"<li class='weibo'><p class='date'>" + self.publish_time[i - 1] +
+                        u"</p><p class='content'>" + self.weibo_content[i - 1] + "</p><p>")
+
+                #image anchors
+                image_info = ""
                 for j in range(0, self.weibo_image_count[i-1]):
-                    #image_info = image_info + self.weibo_image_links[image_link_index] + "\n"
-                    image_info = image_info + "%d " % image_link_index
+                    image_info = image_info + "<a href='images/%d.jpg' data-lightbox='group%d'><img src='images/%d.jpg'></a>" % (image_link_index, i, image_link_index)
                     image_link_index += 1
-                result = result + text + image_info + "\n\n"
+
+                text_tail = (u"</p><p>up count：<span class='upCount'>" + str(self.up_num[i - 1]) +
+                        u"</span>retweet count：<span class='retweetCount'>" + str(self.retweet_num[i - 1]) +
+                        u"</span>comment count: <span class='commentCount'>" + str(self.comment_num[i - 1]) +
+                        "</span></p></li>")
+                result = result + text_head + image_info + text_tail
+
+            result_tail = '''
+                </ul></div><script src="js/jquery.js"></script><script src="js/lightbox.js"></script>
+                <script src="js/list.js"></script><script src="js/script.js"></script></body></html>
+                '''
+
+            result = result_header + result + result_tail
             file_dir = os.path.split(os.path.realpath(__file__))[
                 0] + os.sep + "weibo" + os.sep + str(self.user_id)
             if not os.path.isdir(file_dir):
                 os.mkdir(file_dir)
-            file_path = file_dir + os.sep + "index.txt"
+            file_path = file_dir + os.sep + "index.html"
             f = open(file_path, "wb")
             f.write(result.encode("utf-8"))
             f.close()
@@ -284,8 +303,18 @@ class Weibo:
                 print "Failed to download image #%d" %index
 
             index += 1
+            if index % 5 == 0:
+                print "sleep for 5 seconds"
+                time.sleep(5)
 
-
+    def moveFiles(self):
+        print "Final step: copy some supporting files"
+        src_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep
+        dest_dir = src_dir + "weibo" + os.sep + str(self.user_id) + os.sep
+        copy_tree(src_dir+"js", dest_dir+"js")
+        copy_tree(src_dir+"css", dest_dir+"css")
+        copy_tree(src_dir+"images", dest_dir+"images")
+    
     # 运行爬虫
     def start(self):
         try:
@@ -294,6 +323,7 @@ class Weibo:
             self.get_weibo_info()
             self.write_txt()
             self.download_images()
+            self.moveFiles()
             print u"\nCompleted successfully!"
             print "==========================================================================="
         except Exception, e:
