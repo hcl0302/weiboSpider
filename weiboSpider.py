@@ -10,6 +10,7 @@ from datetime import datetime
 from datetime import timedelta
 from lxml import etree
 import time
+import shutil
 
 
 class Weibo:
@@ -99,8 +100,9 @@ class Weibo:
             pattern_one_image = re.compile(r'^http://weibo.cn/mblog/oripic',re.I)
             pattern_all_image = re.compile(r'^http://weibo.cn/mblog/picAll',re.I)
             pattern_one_image2 = re.compile(r'^/mblog/oripic',re.I)
-            #for page in range(1, page_num + 1):
-            for page in range(1, 2):
+            print "Total page num: " + str(page_num)
+            page_num = 1
+            for page in range(1, page_num + 1):
                 print "downloading page: %d" % (page)
                 url2 = "https://weibo.cn/u/%d?filter=%d&page=%d" % (
                     self.user_id, self.filter, page)
@@ -227,7 +229,7 @@ class Weibo:
                       u"\nfollowers:" + str(self.followers) +
                       result_header
                       )
-            image_link_index = 0
+            image_link_index = 1
             for i in range(1, self.weibo_num2 + 1):
                 text = (str(i) + ":" + self.weibo_content[i - 1] + "\n" +
                         u"images count: " + str(self.weibo_image_count[i-1]) + "\n"
@@ -236,16 +238,17 @@ class Weibo:
                         u"   retweet num：" + str(self.retweet_num[i - 1]) +
                         u"   comment num：" + str(self.comment_num[i - 1]) + "\n\n"
                         )
-                image_info = ""
+                image_info = "images: "
                 for j in range(0, self.weibo_image_count[i-1]):
-                    image_info = image_info + self.weibo_image_links[image_link_index] + "\n"
+                    #image_info = image_info + self.weibo_image_links[image_link_index] + "\n"
+                    image_info = image_info + "%d " % image_link_index
                     image_link_index += 1
-                result = result + text + image_info
+                result = result + text + image_info + "\n\n"
             file_dir = os.path.split(os.path.realpath(__file__))[
-                0] + os.sep + "weibo"
+                0] + os.sep + "weibo" + os.sep + str(self.user_id)
             if not os.path.isdir(file_dir):
                 os.mkdir(file_dir)
-            file_path = file_dir + os.sep + "%d" % self.user_id + ".txt"
+            file_path = file_dir + os.sep + "index.txt"
             f = open(file_path, "wb")
             f.write(result.encode("utf-8"))
             f.close()
@@ -254,6 +257,35 @@ class Weibo:
             print "Error: ", e
             traceback.print_exc()
 
+    def download_images(self):
+        if len(self.weibo_image_links) == 0:
+            print "No images to download"
+            return
+        print "Start to download images"
+        file_dir = os.path.split(os.path.realpath(__file__))[
+            0] + os.sep + "weibo" + os.sep + str(self.user_id) + os.sep + "images"
+        if not os.path.isdir(file_dir):
+            os.mkdir(file_dir)
+        index = 1
+        for img_url in self.weibo_image_links:
+            file_path = file_dir + os.sep + "%d.jpg" % index
+            print "Trying to download image #%d" % index
+            try:
+                img_url = re.sub(r"amp;", '', img_url)
+
+                img_request = requests.get(img_url, cookies=self.cookie, stream=True)
+                if img_request.status_code == 200:
+                    with open(file_path, 'wb') as f:
+                        img_request.raw.decode_content = True
+                        shutil.copyfileobj(img_request.raw, f)
+                else:
+                    print "Bad response from server: %d" % img_request.status_code
+            except:
+                print "Failed to download image #%d" %index
+
+            index += 1
+
+
     # 运行爬虫
     def start(self):
         try:
@@ -261,6 +293,7 @@ class Weibo:
             self.get_user_info()
             self.get_weibo_info()
             self.write_txt()
+            self.download_images()
             print u"\nCompleted successfully!"
             print "==========================================================================="
         except Exception, e:
