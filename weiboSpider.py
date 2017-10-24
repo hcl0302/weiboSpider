@@ -12,13 +12,13 @@ from lxml import etree
 import time
 import shutil
 from distutils.dir_util import copy_tree
+import ConfigParser
 
 
 class Weibo:
-    cookie = {"Cookie": "ALF=1511292190; SCF=Ao8FN3T73o955m8rh4WVlZGsDpMYvW3n5xoJ_YijU7myixsdOK4V3ywzGht1nH2z5X3WsF7uD4eCeWFPFvdvrts.; SUBP=0033WrSXqPxfM725Ws9jqgMF55529P9D9WW848PI.Op2TZ2OZN0dhmri5JpX5KMhUgL.Foe7e050S0n01hM2dJLoIpW2IgDuMNxEqHvTMrH0Ic8j; _T_WM=4c97dd7f3d4d7a76dfffe9b223cbeb9b; SUB=_2A2506IYMDeRhGeVO6FIS9ybPwzuIHXVUEipErDV6PUJbkdBeLVDQkW1bEjRoiGvmRoWP9BaoxrwhFgrxCQ..; SUHB=0z1AL6Yu7J5YXN; SSOLoginState=1508701788"}  # 将your cookie替换成自己的cookie
 
     # Weibo类初始化
-    def __init__(self, user_id, filter=0):
+    def __init__(self, user_id, my_cookie, max_page, wait_time, filter=0):
         self.user_id = user_id  # 用户id，即需要我们输入的数字，如昵称为“Dear-迪丽热巴”的id为1669879400
         self.filter = filter  # 取值范围为0、1，程序默认值为0，代表要爬取用户的全部微博，1代表只爬取用户的原创微博
         self.username = ''  # 用户名，如“Dear-迪丽热巴”
@@ -35,6 +35,9 @@ class Weibo:
         self.up_num = []  # 微博对应的点赞数
         self.retweet_num = []  # 微博对应的转发数
         self.comment_num = []  # 微博对应的评论数
+        self.cookie = {"Cookie": my_cookie}
+        self.max_page = max_page
+        self.wait_time = wait_time
 
     # 获取用户昵称
     def get_username(self):
@@ -44,7 +47,7 @@ class Weibo:
             selector = etree.HTML(html)
             username = selector.xpath("//title/text()")[0]
             self.username = username[:-3]
-            #print (u"username: " + self.username).encode("utf-8")
+            print (u"username:" + self.username).encode("utf-8")
         except Exception, e:
             print "Error: ", e
             traceback.print_exc()
@@ -102,7 +105,9 @@ class Weibo:
             pattern_all_image = re.compile(r'^http://weibo.cn/mblog/picAll',re.I)
             pattern_one_image2 = re.compile(r'^/mblog/oripic',re.I)
             print "Total page num: " + str(page_num)
-            page_num = 1
+            if page_num > self.max_page:
+                print "But you specified a max page num, it'll only download the first %d pages." % self.max_page
+                page_num = self.max_page
             for page in range(1, page_num + 1):
                 print "downloading page: %d" % (page)
                 url2 = "https://weibo.cn/u/%d?filter=%d&page=%d" % (
@@ -182,29 +187,45 @@ class Weibo:
                         #print (u"publish time：" + publish_time).encode("utf-8")
 
                         # 点赞数
-                        str_zan = info[i].xpath("div/a/text()")[-4]
-                        guid = re.findall(pattern, str_zan, re.M)
-                        up_num = int(guid[0])
-                        self.up_num.append(up_num)
-                        #print "up num: " + str(up_num)
+                        str_infos = info[i].xpath("div/a/text()")
+                        if len(str_infos) > 3:
+                            str_zan = info[i].xpath("div/a/text()")[-4]
+                            guid = re.findall(pattern, str_zan, re.M)
+                            if len(guid) > 0:
+                                up_num = int(guid[0])
+                                self.up_num.append(up_num)
+                            else:
+                                self.up_num.append(0)
+                        else:
+                            self.up_num.append(0)
 
                         # 转发数
-                        retweet = info[i].xpath("div/a/text()")[-3]
-                        guid = re.findall(pattern, retweet, re.M)
-                        retweet_num = int(guid[0])
-                        self.retweet_num.append(retweet_num)
-                        #print "retweet num: " + str(retweet_num)
+                        if len(str_infos) > 2:
+                            retweet = info[i].xpath("div/a/text()")[-3]
+                            guid = re.findall(pattern, retweet, re.M)
+                            if len(guid) > 0:
+                                retweet_num = int(guid[0])
+                                self.retweet_num.append(retweet_num)
+                            else:
+                                self.retweet_num.append(0)
+                        else:
+                            self.retweet_num.append(0)
 
                         # 评论数
-                        comment = info[i].xpath("div/a/text()")[-2]
-                        guid = re.findall(pattern, comment, re.M)
-                        comment_num = int(guid[0])
-                        self.comment_num.append(comment_num)
-                        #print "comment num: " + str(comment_num)
+                        if len(str_infos) > 1:
+                            comment = info[i].xpath("div/a/text()")[-2]
+                            guid = re.findall(pattern, comment, re.M)
+                            if len(guid) > 0:
+                                comment_num = int(guid[0])
+                                self.comment_num.append(comment_num)
+                            else:
+                                self.comment_num.append(0)
+                        else:
+                            self.comment_num.append(0)
 
                         self.weibo_num2 += 1
                 print "Sleep for 5 seconds before accessing next page. Please wait..."
-                time.sleep(5)
+                time.sleep(self.wait_time)
 
             if not self.filter:
                 print "total webo number: " + str(self.weibo_num2)
@@ -299,13 +320,16 @@ class Weibo:
                         shutil.copyfileobj(img_request.raw, f)
                 else:
                     print "Bad response from server: %d" % img_request.status_code
+                    print "Failed to download image #%d" %index
+                    print "You can try to download manually later: " + img_url
             except:
                 print "Failed to download image #%d" %index
+                print "You can try to download manually later: " + img_url
 
             index += 1
             if index % 5 == 0:
                 print "sleep for 5 seconds"
-                time.sleep(5)
+                time.sleep(self.wait_time)
 
     def moveFiles(self):
         print "Final step: copy some supporting files"
@@ -332,13 +356,16 @@ class Weibo:
 
 def main():
     try:
-        # 使用实例,输入一个用户id，所有信息都会存储在wb实例中
-        user_id = 5822702445  # 可以改成任意合法的用户id（爬虫的微博id除外）
+        config = ConfigParser.RawConfigParser()
+        config.read('config.ini')
+        user_id = config.getint('user_id', 'user_id')
+        my_cookie = config.get('cookie', 'cookie')
+        max_page = config.getint('max_page', 'max_page')
+        wait_time = config.getint('wait_time', 'wait_time')
+        print "Read config parameters: max_page=%d, wait_time=%d" % (max_page, wait_time)
         filter = 1  # 值为0表示爬取全部微博（原创微博+转发微博），值为1表示只爬取原创微博
-        wb = Weibo(user_id, filter)  # 调用Weibo类，创建微博实例wb
+        wb = Weibo(user_id, my_cookie, max_page, wait_time, filter)  # 调用Weibo类，创建微博实例wb
         wb.start()  # 爬取微博信息
-        print (u"username:" + wb.username).encode("utf-8")
-        print "Saved weibo num:" + str(wb.weibo_num2)
     except Exception, e:
         print "Error: ", e
         traceback.print_exc()
