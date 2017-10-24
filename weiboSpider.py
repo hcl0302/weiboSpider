@@ -284,8 +284,10 @@ class Weibo:
                 '''
 
             result = result_header + result + result_tail
-            file_dir = os.path.split(os.path.realpath(__file__))[
-                0] + os.sep + "weibo" + os.sep + str(self.user_id)
+            weibo_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep + "weibo"
+            if not os.path.isdir(weibo_dir):
+                os.mkdir(weibo_dir)
+            file_dir = weibo_dir + os.sep + str(self.user_id)
             if not os.path.isdir(file_dir):
                 os.mkdir(file_dir)
             file_path = file_dir + os.sep + "index.html"
