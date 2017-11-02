@@ -14,6 +14,7 @@ import shutil
 from distutils.dir_util import copy_tree
 import ConfigParser
 import json
+import sqlite3
 
 
 class Spider:
@@ -28,8 +29,12 @@ class Spider:
         self.wait_time = wait_time
         self.start_date = start_date
         self.end_date = end_date
+        self.overwriting = True
 
-        self.weibos = []
+        self.comment_db_year = None
+        self.comment_db_month = None
+        self.comment_conn = None
+        self.db_conn = None
 
     # 获取用户昵称
     def get_username(self):
@@ -68,8 +73,8 @@ class Spider:
             # 关注数
             str_gz = selector.xpath("//div[@class='tip2']/a/text()")[0]
             guid = re.findall(pattern, str_gz, re.M)
-            self.user["following"] = int(guid[0])
-            print "followings: " + str(self.user["following"])
+            self.user["followings"] = int(guid[0])
+            print "followings: " + str(self.user["followings"])
 
             # 粉丝数
             str_fs = selector.xpath("//div[@class='tip2']/a/text()")[1]
@@ -109,6 +114,10 @@ class Spider:
             publish_time = publish_time[:16]
         return publish_time
 
+    def get_author_from_url(self, url):
+        index = url.rfind('/') + 1
+        return url[index:]
+
     #def get_article(self, url, publish_time):
      #   html = requests.get(url, cookies=self.cookie).content
       #  selector = etree.HTML(html)
@@ -117,13 +126,13 @@ class Spider:
         pattern = r"\d+\.?\d*"
 
         new_weibo = {"publish_time":"", "author_name":"", "author_link":"", "weibo_content":"", "image_num":0, "up_num":0,
-             "retweet_num":0, "comment_num":0, "resource_links":None, "original_weibo": None}
+             "retweet_num":0, "comment_num":0, "resource_links":{}, "original_weibo": None}
 
         html = requests.get(url, cookies=self.cookie).content
         selector = etree.HTML(html)
         main_node = selector.xpath("//div[@id='M_']")[0]
         author_anchor = main_node.xpath("div/a")[0]
-        new_weibo["author_link"] = "https://weibo.cn" + author_anchor.attrib["href"]
+        new_weibo["author_link"] = self.get_author_from_url(author_anchor.attrib["href"])
         new_weibo["author_name"] = author_anchor.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
 
         #publish time
@@ -148,6 +157,8 @@ class Spider:
         else:
             retweet_elem = main_node.xpath("div")[-1]
             new_weibo["weibo_content"] = retweet_elem.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
+            new_weibo["weibo_content"] = new_weibo["weibo_content"].split(str_time)[0]
+            new_weibo["weibo_content"] = new_weibo["weibo_content"].strip()
 
         #images
         if is_original_weibo:
@@ -166,12 +177,7 @@ class Spider:
                 elif link.startswith("/mblog/oripic"):
                     image_links.append("http://weibo.cn" + link)
             new_weibo["image_num"] = len(image_links)
-            if len(image_links) > 0:
-                if not retweet_publish_time:
-                    self.download_images(image_links, new_weibo["publish_time"])
-                else:
-                    self.download_images(image_links, retweet_publish_time + "-retweet")
-
+            new_weibo["image_links"] = image_links
 
         # 点赞数 + 转发数
         str_infos = selector.xpath("//div/span/a")
@@ -193,33 +199,14 @@ class Spider:
         if len(guid) > 0:
             new_weibo["comment_num"] = int(guid[0])
 
-        # get comments
+        #comments
+
         if new_weibo["comment_num"] > 0:
-            comments = []
-
+            new_weibo["comment_url"] = url.split('#')[0] + "&page="
             if selector.xpath("//input[@name='mp']") == []:
-                page_num = 1
+                new_weibo["comment_page_num"] = 1
             else:
-                page_num = (int)(selector.xpath("//input[@name='mp']")[0].attrib["value"])
-                comment_url = url.split('#')[0] + "&page="
-
-            print "Downloading comments with %d pages" % (page_num)
-            for page in range(1, page_num + 1):
-                if page > 1:
-                    html = requests.get(comment_url + str(page), cookies=self.cookie).content
-                    selector = etree.HTML(html)
-                comment_elems = selector.xpath("//div[@class='c']")
-                for elem in comment_elems:
-                    if 'id' in elem.attrib and elem.attrib['id'].startswith("C_"):
-                        comments.append(elem.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8"))
-                if page % 5 == 0:
-                    print "wait for %d seconds" % (self.wait_time)
-                    time.sleep(self.wait_time)
-
-            if not retweet_publish_time:
-                self.write_comments(comments, new_weibo["publish_time"])
-            else:
-                self.write_comments(comments, retweet_publish_time + "-retweet")
+                new_weibo["comment_page_num"] = (int)(selector.xpath("//input[@name='mp']")[0].attrib["value"])
 
         return new_weibo
 
@@ -263,11 +250,11 @@ class Spider:
                             forward_weibo = self.get_weibo_from_html(comment_links[1], False)
                             original_weibo = self.get_weibo_from_html(comment_links[0], True, forward_weibo["publish_time"])
                             forward_weibo["original_weibo"] = original_weibo
-                            self.weibos.append(forward_weibo)
+                            self.write_weibo(forward_weibo)
                         elif len(comment_links) == 1:
                             #it's a original weibo
                             original_weibo = self.get_weibo_from_html(comment_links[0], True)
-                            self.weibos.append(original_weibo)
+                            self.write_weibo(original_weibo)
                         else:
                             print "Error in finding comment links"
                         print "Sleep for 1 seconds before accessing next weibo. Please wait..."
@@ -281,17 +268,79 @@ class Spider:
             traceback.print_exc()
 
 
-    def write_weibo(self):
+    def write_weibo(self, weibo, retweeted = False):
         try:
-            name = "latest"
-            file_path = self.base_dir + os.sep + "weibo" + os.sep + name + ".js"
-            str = "Weibo['%s'] = " % (name) + json.dumps(self.weibos) + ";"
-            f = open(file_path, "wb")
-            f.write(str)
-            f.close()
-            print "Have successfully saved %d weibos" % (len(self.weibos))
+            self.db_cur.execute('''SELECT * FROM weibo WHERE (publish_time=?) AND (weibo_content=?)''', (weibo["publish_time"], weibo["weibo_content"]))
+            row = self.db_cur.fetchone()
+            original_weibo_id = None
+            if row == None:
+                #insert new weibo entry
+                if weibo["original_weibo"] != None:
+                    original_weibo_id = self.write_weibo(weibo["original_weibo"], True)
+                self.db_cur.execute('''INSERT INTO weibo (publish_time,author_link,image_num,weibo_content,up_num,retweet_num,comment_num,original_weibo) 
+                    VALUES(?,?,?,?,?,?,?,?)''', (weibo["publish_time"], weibo["author_link"], weibo["image_num"], weibo["weibo_content"],
+                        weibo["up_num"], weibo["retweet_num"], weibo["comment_num"], original_weibo_id))
+                weibo_id = self.db_cur.lastrowid
+                self.update_author(weibo["author_link"], weibo["author_name"], 1, 0)
+                for key, value in weibo["resource_links"].iteritems():
+                    self.add_resource(value, key, weibo_id)
+                print "insert a new weibo(id: %d)" % (weibo_id)
+                if weibo["image_num"] > 0:
+                    self.download_images(weibo["image_links"], str(weibo_id))
+                if weibo["comment_num"] > 0:
+                    self.write_comments(weibo, weibo_id, retweeted)
+            
+            elif self.overwriting == True:
+                #update weibo, only update comments, re-download images, and update statistics nums
+                #don't update author info, don't add new resources
+                weibo_id = row[0]
+                print "Weibo(id: %d) already exists. Overwriting" % (weibo_id)
+                if weibo["original_weibo"] != None:
+                    original_weibo_id = self.write_weibo(weibo["original_weibo"], True)
+                self.db_cur.execute('''UPDATE weibo SET up_num=?,retweet_num=?,comment_num=? WHERE (publish_time=?) AND (weibo_content=?)''',
+                    (weibo["up_num"],weibo["retweet_num"],weibo["comment_num"], weibo["publish_time"], weibo["weibo_content"]))
+                print "overwriting weibo infomation in database"
+                if weibo["image_num"] > 0:
+                    self.download_images(weibo["image_links"], str(weibo_id))
+                if weibo["comment_num"] > 0:
+                    self.write_comments(weibo, weibo_id, retweeted)
+            else:
+                weibo_id = row[0]
+                print "Weibo(id: %d) already exists. Skip" % (weibo_id)
+            self.db_conn.commit()
+            return weibo_id
         except Exception, e:
-            print "Error: ", e
+            print "Error while writing weibo into database: ", e
+            traceback.print_exc()
+
+    def update_author(self, link, name, add_weibo, add_comment):
+        try:
+            if link.startswith("https://weibo.cn"):
+                link = link[16:]
+            self.db_cur.execute('''SELECT * FROM author WHERE author_link=?''', (link,))
+            row = self.db_cur.fetchone()
+            if row == None:
+                #insert new author entry
+                self.db_cur.execute('''INSERT INTO author (author_link,author_name,weibo_num,comment_num)
+                    VALUES(?,?,?,?)''', (link,name,add_weibo,add_comment))
+                print "insert new author infomation into database"
+            else:
+                self.db_cur.execute('''UPDATE author SET author_name=?,weibo_num=?,comment_num=?
+                    WHERE author_link=?''', (name, row[2]+add_weibo, row[3]+add_comment, link))
+                print "update author infomation in database"
+            self.db_conn.commit()
+        except Exception, e:
+            print "Error while updating author info in database: ", e
+            traceback.print_exc()
+
+    def add_resource(self, url, title, weibo_id):
+        try:
+            self.db_cur.execute('''INSERT INTO resource (url,title,weibo_id)
+                    VALUES(?,?,?)''', (url, title, weibo_id))
+            #print "insert new resource into database"
+            self.db_conn.commit()
+        except Exception, e:
+            print "Error while updating author info in database: ", e
             traceback.print_exc()
 
     def mkdirs(self):
@@ -304,27 +353,112 @@ class Spider:
         img_dir = base_dir + os.sep + "images"
         if not os.path.isdir(img_dir):
             os.mkdir(img_dir)
-        weibo_dir = base_dir + os.sep + "weibo"
-        if not os.path.isdir(weibo_dir):
-            os.mkdir(weibo_dir)
         comments_dir = base_dir + os.sep + "comments"
         if not os.path.isdir(comments_dir):
             os.mkdir(comments_dir)
 
-    def write_comments(self, comments, name):
-        file_path = self.base_dir + os.sep + "comments" + os.sep + name + ".js"
-        str = "Comments['%s'] = " % (name) + json.dumps(comments) + ";"
-        f = open(file_path, "wb")
-        f.write(str)
-        f.close()
+    def init_comment_db(self, year, month):
+        db_file = self.base_dir + os.sep + "comments" + os.sep + "%s.db" % year
+        table_name = "comment_" + month
+        self.comment_db_year = year
+        self.comment_db_month = month
+        self.comment_conn = sqlite3.connect(db_file)
+        self.comment_cur = self.comment_conn.cursor()
+        self.comment_cur.execute("CREATE TABLE IF NOT EXISTS " + table_name + ''' (id INTEGER PRIMARY KEY, author_link TEXT NOT NULL, 
+            author_name TEXT NOT NULL, content TEXT NOT NULL, date TEXT NOT NULL, weibo_id INTEGER NOT NULL);''')
+
+    def find_latest_saved_comment(self, weibo_id, weibo_date):
+        table_name = "comment_" + weibo_date[5:7]
+        try:
+            if self.comment_db_year == None:
+                self.init_comment_db(weibo_date[0:4], weibo_date[5:7])
+            elif self.comment_db_year != weibo_date[0:4]:
+                self.comment_cur.close()
+                self.comment_conn.close()
+                self.init_comment_db(weibo_date[0:4], weibo_date[5:7])
+            elif self.comment_db_month != weibo_date[5:7]:
+                self.comment_cur.execute("CREATE TABLE IF NOT EXISTS " + table_name + ''' (id INTEGER PRIMARY KEY, author_link TEXT NOT NULL, 
+                    author_name TEXT NOT NULL, content TEXT NOT NULL, date TEXT NOT NULL, weibo_id INTEGER NOT NULL);''')
+                self.comment_db_month = weibo_date[5:7]
+            self.comment_cur.execute("SELECT date from " + table_name + " WHERE weibo_id=? ORDER BY date DESC LIMIT 1", (weibo_id,))
+            row = self.comment_cur.fetchone()
+            if row == None:
+                return None
+            else:
+                return row[0]
+        except Exception, e:
+            print "Error while loading comments from database: ", e
+
+    def get_comments(self, weibo, weibo_id):
+        page_num = weibo["comment_page_num"]
+        comment_url = weibo["comment_url"]
+        comments = []
+        last_date = self.find_latest_saved_comment(weibo_id, weibo["publish_time"])
+        print "Downloading comments with %d pages" % (page_num)
+        for page in range(1, page_num + 1):
+            html = requests.get(comment_url + str(page), cookies=self.cookie).content
+            selector = etree.HTML(html)
+            comment_elems = selector.xpath("//div[@class='c']")
+            for elem in comment_elems:
+                if 'id' in elem.attrib and elem.attrib['id'].startswith("C_"):
+                    comment = {"content":"", "author_link":"", "author_name":"", "reply_to_link":None, "reply_to_name":None, "date":""}
+                    author = elem.xpath("a")[0]
+                    comment["author_name"] = author.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
+                    comment["author_link"] = self.get_author_from_url(author.attrib["href"])
+                    content = elem.xpath("span[@class='ctt']")[0]
+                    comment["content"] = content.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
+                    reply_to = content.xpath("a")
+                    if len(reply_to) > 0:
+                        comment["reply_to_name"] = reply_to[0].text
+                        comment["reply_to_link"] = reply_to[0].attrib["href"]
+                    str_time = elem.xpath("span[@class='ct']")[0].xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
+                    str_time = str_time.split(u'来自')[0]
+                    comment["date"] = self.get_publish_time(str_time)
+                    if last_date != None and last_date >= comment["date"]:
+                        print "Found old comments already exist. Skip"
+                        return comments
+                    comments.append(comment)
+            if page % 5 == 0:
+                print "wait for %d seconds" % (self.wait_time)
+                time.sleep(self.wait_time)
+        return comments
+
+    def write_comments(self, weibo, weibo_id, retweeted):
+        
+        weibo_date = weibo["publish_time"]
+        comments = self.get_comments(weibo, weibo_id)
+        if len(comments) == 0:
+            return
+        table_name = "comment_" + weibo_date[5:7]
+        try:
+            records = []
+            for comment in comments:
+                record = (comment["author_link"], comment["author_name"], comment["content"], comment["date"], weibo_id)
+                if retweeted == False:
+                    self.update_author(comment["author_link"], comment["author_name"], 0, 1)
+                records.append(record)
+            
+            self.comment_cur.executemany("INSERT INTO " + table_name + " (author_link,author_name,content,date,weibo_id) VALUES(?,?,?,?,?)", records)
+            
+            self.comment_conn.commit()
+        except Exception, e:
+            print "Error while writing comments into database: ", e
 
 
     def write_user_info(self):
-        file_path = self.base_dir + os.sep + "user.js"
-        str = "var userInfo = " + json.dumps(self.user) + ";"
-        f = open(file_path, "wb")
-        f.write(str)
-        f.close()
+        try:
+            self.db_cur.execute('''SELECT * FROM user''')
+            if len(self.db_cur.fetchall()) == 0:
+                self.db_cur.execute('''INSERT INTO user (user_id,user_name,followings,followers,weibo_num) 
+                    VALUES(?,?,?,?,?)''', (self.user_id, self.user["username"], self.user["followings"], self.user["followers"], self.user["weibo_num"]))
+                print "insert new user infomation into database"
+            else:
+                self.db_cur.execute('''UPDATE user SET user_name=?,followings=?,followers=?,weibo_num=?
+                    WHERE user_id=?''', (self.user["username"], self.user["followings"], self.user["followers"], self.user["weibo_num"], self.user_id))
+                print "update user infomation in database"
+            self.db_conn.commit()
+        except Exception, e:
+            print "Error while writing user info into database: ", e
 
     def download_images(self, links, name):
         print "Downloading %d images for weibo %s" % (len(links), name)
@@ -333,6 +467,10 @@ class Spider:
         for img_url in links:
             file_path = file_path_base + "%d.jpg" % index
             try:
+                if os.path.isfile(file_path):
+                    print "Image file(%s) already exists, Skip" % (file_path)
+                    index += 1
+                    continue
                 img_url = re.sub(r"amp;", '', img_url)
                 img_request = requests.get(img_url, cookies=self.cookie, stream=True)
                 if img_request.status_code == 200:
@@ -349,14 +487,43 @@ class Spider:
 
             index += 1
 
-    def moveFiles(self):
+    def move_files(self):
         print "Final step: copy some supporting files"
         src_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep
         dest_dir = self.base_dir + os.sep
         copy_tree(src_dir+"js", dest_dir+"js")
         copy_tree(src_dir+"css", dest_dir+"css")
         copy_tree(src_dir+"images", dest_dir+"images")
+
+    def init_db(self):
+        db_file = self.base_dir + os.sep + "%d.db" % self.user_id
+        try:
+            self.db_conn = sqlite3.connect(db_file)
+            self.db_cur = self.db_conn.cursor()
+            self.db_cur.execute('''SELECT * FROM sqlite_master WHERE name ='user' and type='table';''')
+            if len(self.db_cur.fetchall()) == 0:
+                print "create tables in local database"
+                self.db_cur.execute('''CREATE TABLE user (user_id INTEGER PRIMARY KEY NOT NULL, user_name TEXT NOT NULL, 
+                    followings INTEGER NOT NULL, followers INTEGER NOT NULL, weibo_num INTEGER NOT NULL);''')
+                self.db_cur.execute('''CREATE TABLE author (author_link TEXT PRIMARY KEY NOT NULL, author_name TEXT NOT NULL,
+                    weibo_num INTEGER NOT NULL, comment_num INTEGER NOT NULL);''')
+                self.db_cur.execute('''CREATE TABLE weibo (weibo_id INTEGER PRIMARY KEY, publish_time TEXT NOT NULL, author_link TEXT NOT NULL, 
+                    image_num INTEGER NOT NULL, weibo_content TEXT NOT NULL, up_num INTEGER NOT NULL, 
+                    retweet_num INTEGER NOT NULL, comment_num INTEGER NOT NULL, original_weibo INTEGER);''')
+                self.db_cur.execute('''CREATE TABLE resource (resource_id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,
+                    weibo_id INTEGER NOT NULL, FOREIGN KEY(weibo_id) REFERENCES weibo(weibo_id));''')
+                self.db_conn.commit()
+            return True
+        except Exception, e:
+            print "Error while init database: ", e
+            return False
     
+    def clean_up(self):
+        if self.comment_conn != None:
+            self.comment_conn.close()
+        if self.db_conn != None:
+            self.db_conn.close()
+
     # 运行爬虫
     def start(self):
         try:
@@ -366,10 +533,14 @@ class Spider:
                 return
             self.get_user_info()
             self.mkdirs()
+            if self.init_db() == False:
+                print "\nWeibo Backup Failed"
+                print "==========================================================================="
+                return
             self.write_user_info()
             self.get_weibo_info()
-            self.write_weibo()
-            self.moveFiles()
+            #self.move_files()
+            self.clean_up()
             print "\nCompleted successfully!"
             print "Please check the following directory to see results: " + self.base_dir
             print "==========================================================================="
