@@ -13,51 +13,88 @@ import time
 import shutil
 from distutils.dir_util import copy_tree
 import ConfigParser
-import json
 import sqlite3
 
 
 class Spider:
 
-    def __init__(self, user_id, my_cookie, max_page, wait_time, start_date = "", end_date = ""):
-        self.user = {}
-        self.user_id = user_id  # 用户id，即需要我们输入的数字，如昵称为“Dear-迪丽热巴”的id为1669879400
+    def __init__(self, user_address, my_cookie, max_page, wait_time, start_date = "", end_date = ""):
+        self.cookie = {"Cookie": my_cookie}
+        self.user = {"username": None}
+        if user_address.isdigit():
+            self.user_id = int(user_address)
+            self.user_address = None
+        else:
+            self.user_address = user_address
+            self.user_id = self.get_user_id(user_address)
+        if self.user_id:
+            profile = self.get_user_profile(self.user_id)
+            self.user["username"] = profile["username"]
+            self.user["img"] = profile["img"]
         self.base_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep + "backup" + os.sep + str(self.user_id)
         self.filter = 0  # 取值范围为0、1，程序默认值为0，代表要爬取用户的全部微博，1代表只爬取用户的原创微博
-        self.cookie = {"Cookie": my_cookie}
         self.max_page = max_page
         self.wait_time = wait_time
         self.start_date = start_date
         self.end_date = end_date
-        self.overwriting = True
+        self.overwriting = False
 
         self.comment_db_year = None
         self.comment_db_month = None
         self.comment_conn = None
         self.db_conn = None
 
-    # 获取用户昵称
-    def get_username(self):
+    def get_user_id(self, user_address):
         try:
-            url = "https://weibo.cn/%d/info" % (self.user_id)
+            url = "https://weibo.cn/" + user_address
             html = requests.get(url, cookies=self.cookie).content
             selector = etree.HTML(html)
-            username = selector.xpath("//title/text()")[0]
-            self.user["username"] = username[:-3]
-            print (u"username:" + self.user["username"]).encode("utf-8")
-            return True
+            href = selector.xpath("//table/tr/td/a/@href")[0]
+            index = href.find("/avatar")
+            if index < 0:
+                return None
+            user_id = int(href[1:index])
+            return user_id
         except Exception, e:
             print "Error: ", e
             traceback.print_exc()
-            return False
+            return None
+
+    def get_user_profile(self, user_id):
+        profile = {"username":None, "img":None}
+        try:
+            url = "https://weibo.cn/%d/info" % (user_id)
+            html = requests.get(url, cookies=self.cookie).content
+            selector = etree.HTML(html)
+            username = selector.xpath("//title/text()")[0]
+            profile["username"] = username[:-3]
+            print (u"username:" + profile["username"]).encode("utf-8")
+            #download profile image_num
+            image_link = selector.xpath("//div[@class='c']/img/@src")[0]
+            profile["img"] = image_link
+            return profile
+        except Exception, e:
+            print "Error: ", e
+            traceback.print_exc()
+            return None
+
 
     # 获取用户微博数、关注数、粉丝数
     def get_user_info(self):
         try:
-            url = "https://weibo.cn/u/%d?filter=%d&page=1" % (
-                self.user_id, self.filter)
-            html = requests.get(url, cookies=self.cookie).content
+            self.base_url = ""
+            if self.start_date and self.end_date:
+                self.base_url = "https://weibo.cn/%d/profile?hasori=0&haspic=0&starttime=%s&endtime=%s&advancedfilter=1" % (self.user_id, self.start_date, self.end_date)
+            else:
+                self.base_url = "https://weibo.cn/u/%d?filter=%d" % (self.user_id, self.filter)
+            
+            html = requests.get(self.base_url + "&page=1", cookies=self.cookie).content
             selector = etree.HTML(html)
+            if selector.xpath("//input[@name='mp']") == []:
+                self.page_num = 1
+            else:
+                self.page_num = (int)(selector.xpath("//input[@name='mp']")[0].attrib["value"])
+
             pattern = r"\d+\.?\d*"
 
             # 微博数
@@ -216,27 +253,14 @@ class Spider:
     # 获取用户微博内容及对应的发布时间、点赞数、转发数、评论数
     def get_weibo_info(self):
         try:
-            base_url = ""
-            if self.start_date and self.end_date:
-                base_url = "https://weibo.cn/%d/profile?hasori=0&haspic=0&starttime=%s&endtime=%s&advancedfilter=1" % (self.user_id, self.start_date, self.end_date)
-            else:
-                base_url = "https://weibo.cn/u/%d?filter=%d" % (self.user_id, self.filter)
-            
-            html = requests.get(base_url + "&page=1", cookies=self.cookie).content
-            selector = etree.HTML(html)
-            if selector.xpath("//input[@name='mp']") == []:
-                page_num = 1
-            else:
-                page_num = (int)(selector.xpath("//input[@name='mp']")[0].attrib["value"])
-            
-            print "Total page num: " + str(page_num)
-            if page_num > self.max_page:
+            print "Total page num: " + str(self.page_num)
+            if self.page_num > self.max_page:
                 print "But you specified a max page num, it'll only download the first %d pages." % self.max_page
-                page_num = self.max_page
+                self.page_num = self.max_page
 
-            for page in range(1, page_num + 1):
+            for page in range(1, self.page_num + 1):
                 print "downloading page: %d" % (page)
-                url2 = base_url + "&page=%d" % (page)
+                url2 = self.base_url + "&page=%d" % (page)
                 html2 = requests.get(url2, cookies=self.cookie).content
                 selector2 = etree.HTML(html2)
                 info = selector2.xpath("//div[@class='c']")
@@ -273,6 +297,7 @@ class Spider:
             self.db_cur.execute('''SELECT * FROM weibo WHERE (publish_time=?) AND (weibo_content=?)''', (weibo["publish_time"], weibo["weibo_content"]))
             row = self.db_cur.fetchone()
             original_weibo_id = None
+            img_dir_name = "retweet" if retweeted==True else "original"
             if row == None:
                 #insert new weibo entry
                 if weibo["original_weibo"] != None:
@@ -286,7 +311,7 @@ class Spider:
                     self.add_resource(value, key, weibo_id)
                 print "insert a new weibo(id: %d)" % (weibo_id)
                 if weibo["image_num"] > 0:
-                    self.download_images(weibo["image_links"], str(weibo_id))
+                    self.download_images(weibo["image_links"], str(weibo_id), img_dir_name)
                 if weibo["comment_num"] > 0:
                     self.write_comments(weibo, weibo_id, retweeted)
             
@@ -301,7 +326,7 @@ class Spider:
                     (weibo["up_num"],weibo["retweet_num"],weibo["comment_num"], weibo["publish_time"], weibo["weibo_content"]))
                 print "overwriting weibo infomation in database"
                 if weibo["image_num"] > 0:
-                    self.download_images(weibo["image_links"], str(weibo_id))
+                    self.download_images(weibo["image_links"], str(weibo_id), img_dir_name)
                 if weibo["comment_num"] > 0:
                     self.write_comments(weibo, weibo_id, retweeted)
             else:
@@ -313,20 +338,31 @@ class Spider:
             print "Error while writing weibo into database: ", e
             traceback.print_exc()
 
-    def update_author(self, link, name, add_weibo, add_comment):
+    def update_author(self, link, name, add_weibo, add_comment, img_url=None):
         try:
             if link.startswith("https://weibo.cn"):
                 link = link[16:]
-            self.db_cur.execute('''SELECT * FROM author WHERE author_link=?''', (link,))
+            user_id = None
+            user_address = None
+            if link.isdigit():
+                user_id = int(link)
+            else:
+                user_address = link
+                user_id = self.get_user_id(link)
+            if img_url == None:
+                profile = self.get_user_profile(user_id)
+                img_url = profile["img"]
+            self.db_cur.execute('''SELECT * FROM author WHERE author_id=?''', (user_id,))
             row = self.db_cur.fetchone()
             if row == None:
                 #insert new author entry
-                self.db_cur.execute('''INSERT INTO author (author_link,author_name,weibo_num,comment_num)
-                    VALUES(?,?,?,?)''', (link,name,add_weibo,add_comment))
+                self.download_images([img_url], str(user_id), "author")
+                self.db_cur.execute('''INSERT INTO author (author_id,author_address,author_name,img_url,weibo_num,comment_num)
+                    VALUES(?,?,?,?,?,?)''', (user_id,user_address,name,img_url,add_weibo,add_comment))
                 print "insert new author infomation into database"
             else:
-                self.db_cur.execute('''UPDATE author SET author_name=?,weibo_num=?,comment_num=?
-                    WHERE author_link=?''', (name, row[2]+add_weibo, row[3]+add_comment, link))
+                self.db_cur.execute('''UPDATE author SET author_address=?,author_name=?,weibo_num=?,comment_num=?
+                    WHERE author_id=?''', (user_address, name, row[4]+add_weibo, row[5]+add_comment, user_id))
                 print "update author infomation in database"
             self.db_conn.commit()
         except Exception, e:
@@ -353,12 +389,21 @@ class Spider:
         img_dir = base_dir + os.sep + "images"
         if not os.path.isdir(img_dir):
             os.mkdir(img_dir)
-        comments_dir = base_dir + os.sep + "comments"
+        img_original_dir = img_dir + os.sep + "original"
+        if not os.path.isdir(img_original_dir):
+            os.mkdir(img_original_dir)
+        img_retweet_dir = img_dir + os.sep + "retweet"
+        if not os.path.isdir(img_retweet_dir):
+            os.mkdir(img_retweet_dir)
+        img_author_dir = img_dir + os.sep + "author"
+        if not os.path.isdir(img_author_dir):
+            os.mkdir(img_author_dir)
+        comments_dir = base_dir + os.sep + "db"
         if not os.path.isdir(comments_dir):
             os.mkdir(comments_dir)
 
     def init_comment_db(self, year, month):
-        db_file = self.base_dir + os.sep + "comments" + os.sep + "%s.db" % year
+        db_file = self.base_dir + os.sep + "db" + os.sep + "%s.db" % year
         table_name = "comment_" + month
         self.comment_db_year = year
         self.comment_db_month = month
@@ -457,12 +502,13 @@ class Spider:
                     WHERE user_id=?''', (self.user["username"], self.user["followings"], self.user["followers"], self.user["weibo_num"], self.user_id))
                 print "update user infomation in database"
             self.db_conn.commit()
+            self.update_author(str(self.user_id), self.user["username"], 0, 0, self.user["img"])
         except Exception, e:
             print "Error while writing user info into database: ", e
 
-    def download_images(self, links, name):
+    def download_images(self, links, name, dir_name):
         print "Downloading %d images for weibo %s" % (len(links), name)
-        file_path_base = self.base_dir + os.sep + "images" + os.sep + name + "-"
+        file_path_base = self.base_dir + os.sep + "images" + os.sep + dir_name + os.sep + name + "-"
         index = 1
         for img_url in links:
             file_path = file_path_base + "%d.jpg" % index
@@ -496,7 +542,7 @@ class Spider:
         copy_tree(src_dir+"images", dest_dir+"images")
 
     def init_db(self):
-        db_file = self.base_dir + os.sep + "%d.db" % self.user_id
+        db_file = self.base_dir + os.sep + "db" + os.sep + "weibo.db"
         try:
             self.db_conn = sqlite3.connect(db_file)
             self.db_cur = self.db_conn.cursor()
@@ -505,8 +551,8 @@ class Spider:
                 print "create tables in local database"
                 self.db_cur.execute('''CREATE TABLE user (user_id INTEGER PRIMARY KEY NOT NULL, user_name TEXT NOT NULL, 
                     followings INTEGER NOT NULL, followers INTEGER NOT NULL, weibo_num INTEGER NOT NULL);''')
-                self.db_cur.execute('''CREATE TABLE author (author_link TEXT PRIMARY KEY NOT NULL, author_name TEXT NOT NULL,
-                    weibo_num INTEGER NOT NULL, comment_num INTEGER NOT NULL);''')
+                self.db_cur.execute('''CREATE TABLE author (author_id INTEGER PRIMARY KEY NOT NULL, author_address TEXT, author_name TEXT NOT NULL,
+                    img_url TEXT NOT NULL, weibo_num INTEGER NOT NULL, comment_num INTEGER NOT NULL);''')
                 self.db_cur.execute('''CREATE TABLE weibo (weibo_id INTEGER PRIMARY KEY, publish_time TEXT NOT NULL, author_link TEXT NOT NULL, 
                     image_num INTEGER NOT NULL, weibo_content TEXT NOT NULL, up_num INTEGER NOT NULL, 
                     retweet_num INTEGER NOT NULL, comment_num INTEGER NOT NULL, original_weibo INTEGER);''')
@@ -527,7 +573,7 @@ class Spider:
     # 运行爬虫
     def start(self):
         try:
-            if self.get_username() == False:
+            if self.user_id == None or self.user["username"] == None:
                 print "\nWeibo Backup Failed"
                 print "==========================================================================="
                 return
@@ -546,20 +592,20 @@ class Spider:
             print "==========================================================================="
         except Exception, e:
             print "Error: ", e
-
+            traceback.print_exc()
 
 def main():
     try:
         config = ConfigParser.RawConfigParser()
         config.read('config.ini')
-        user_id = config.getint('user_id', 'user_id')
+        user_address = config.get('user', 'user')
         my_cookie = config.get('cookie', 'cookie')
         max_page = config.getint('max_page', 'max_page')
         wait_time = config.getint('wait_time', 'wait_time')
         start_date = config.get('date_range', 'start_date')
         end_date = config.get('date_range', 'end_date')
         print "Read config parameters: max_page=%d, wait_time=%d" % (max_page, wait_time)
-        spider = Spider(user_id, my_cookie, max_page, wait_time)  # 调用Weibo类，创建微博实例wb
+        spider = Spider(user_address, my_cookie, max_page, wait_time)
         spider.start()  # 爬取微博信息
     except Exception, e:
         print "Error: ", e
