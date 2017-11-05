@@ -26,7 +26,6 @@ class Spider:
         self.comment_conn = None
         self.db_conn = None
         self.db_cur = None
-        self.retweet_db_conn = None
 
         if user_address.isdigit():
             self.user_id = int(user_address)
@@ -169,7 +168,7 @@ class Spider:
         pattern = r"\d+\.?\d*"
 
         new_weibo = {"publish_time":"", "author_name":"", "author_link":"", "weibo_content":"", "image_num":0, "up_num":0,
-             "retweet_num":0, "comment_num":0, "resource_num":0, "resource_links":{}, "original_weibo": None}
+             "retweet_num":0, "comment_num":0, "weibo_type":1, "resource_links":{}, "original_weibo": None}
 
         html = requests.get(url, cookies=self.cookie).content
         selector = etree.HTML(html)
@@ -196,13 +195,13 @@ class Spider:
                 if 'href' in link.attrib and link.attrib['href'].startswith("http://weibo.cn/sinaurl"):
                     key = link.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
                     resource_links[key] = link.attrib['href']
-                    new_weibo["resource_num"] += 1
+                    new_weibo["weibo_type"] = 4
             new_weibo["resource_links"] = resource_links
         else:
             retweet_elem = main_node.xpath("div")[-1]
             new_weibo["weibo_content"] = retweet_elem.xpath("string(.)").encode("utf-8", "ignore").decode("utf-8")
             new_weibo["weibo_content"] = new_weibo["weibo_content"].split(str_time)[0]
-            new_weibo["weibo_content"] = new_weibo["weibo_content"].strip()
+        new_weibo["weibo_content"] = new_weibo["weibo_content"].strip()
 
         #images
         if is_original_weibo:
@@ -222,6 +221,8 @@ class Spider:
                     image_links.append("http://weibo.cn" + link)
             new_weibo["image_num"] = len(image_links)
             new_weibo["image_links"] = image_links
+            if len(image_links) > 0:
+                new_weibo["weibo_type"] = 2
 
         # 点赞数 + 转发数
         str_infos = selector.xpath("//div/span/a")
@@ -302,10 +303,12 @@ class Spider:
     def write_weibo(self, weibo, retweeted = False):
         try:
             img_dir_name = "retweet" if retweeted else "original"
-            db_conn, db_cur = self.get_db_cur(retweeted)
-
-            db_cur.execute('''SELECT * FROM weibo WHERE (publish_time=?) AND (weibo_content=?)''', (weibo["publish_time"], weibo["weibo_content"]))
-            row = db_cur.fetchone()
+            if retweeted:
+                self.db_cur.execute('''SELECT * FROM retweet_weibo WHERE (retweet_publish_time=?) AND (retweet_weibo_content=?)''', 
+                    (weibo["publish_time"], weibo["weibo_content"]))
+            else:
+                self.db_cur.execute('''SELECT * FROM weibo WHERE (publish_time=?) AND (weibo_content=?)''', (weibo["publish_time"], weibo["weibo_content"]))
+            row = self.db_cur.fetchone()
             original_weibo_id = None
 
             if row != None and self.overwriting == False:
@@ -315,23 +318,36 @@ class Spider:
 
             if weibo["original_weibo"] != None:
                 original_weibo_id = self.write_weibo(weibo["original_weibo"], True)
+                weibo["weibo_type"] = weibo["original_weibo"]["weibo_type"]
 
             if row == None:
                 if weibo["author_link"].isdigit():
                     user_id = int(weibo["author_link"])
                 else:
                     user_id = self.get_user_id(weibo["author_link"], retweeted)
-                is_article = False
-                #insert new weibo entry
-                db_cur.execute('''INSERT INTO weibo (publish_time,author_id,author_name,image_num,weibo_content,up_num,retweet_num,comment_num,
-                    resource_num,is_article,original_weibo) 
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)''', (weibo["publish_time"], user_id,weibo["author_name"], weibo["image_num"], weibo["weibo_content"],
-                        weibo["up_num"], weibo["retweet_num"], weibo["comment_num"], weibo["resource_num"], is_article, original_weibo_id))
-                weibo_id = db_cur.lastrowid
+
                 for key, value in weibo["resource_links"].iteritems():
-                    is_article = is_article or self.add_resource(value, key, weibo_id, retweeted)
-                if is_article:
-                    db_cur.execute("UPDATE weibo SET is_article=? WHERE weibo_id=?",(is_article, weibo_id))
+                    article_url = self.get_article_url(value)
+                    if article_url != None:
+                        print "debug: article url: " + article_url
+                        weibo["resource_links"][key] = article_url
+                        weibo["weibo_type"] = 3
+                        break
+
+
+                if retweeted:
+                    self.db_cur.execute('''INSERT INTO retweet_weibo (retweet_publish_time,retweet_author_id,retweet_author_name,retweet_image_num,retweet_weibo_content,
+                        retweet_up_num,retweet_retweet_num,retweet_comment_num,retweet_weibo_type) 
+                        VALUES(?,?,?,?,?,?,?,?,?)''', (weibo["publish_time"], user_id,weibo["author_name"], weibo["image_num"], weibo["weibo_content"],
+                        weibo["up_num"], weibo["retweet_num"], weibo["comment_num"], weibo["weibo_type"]))
+                else:
+                    self.db_cur.execute('''INSERT INTO weibo (publish_time,author_id,author_name,image_num,weibo_content,up_num,retweet_num,comment_num,weibo_type ,original_weibo) 
+                        VALUES(?,?,?,?,?,?,?,?,?,?)''', (weibo["publish_time"], user_id,weibo["author_name"], weibo["image_num"], weibo["weibo_content"],
+                        weibo["up_num"], weibo["retweet_num"], weibo["comment_num"], weibo["weibo_type"], original_weibo_id))
+                
+                weibo_id = self.db_cur.lastrowid
+                for key, value in weibo["resource_links"].iteritems():
+                    self.add_resource(value, key, weibo_id, retweeted)
                 self.update_author(str(user_id), weibo["author_name"], 1, 0, retweeted)
                 print "insert a new weibo(id: %d)" % (weibo_id)
                 if weibo["image_num"] > 0:
@@ -344,27 +360,31 @@ class Spider:
                 #don't update author info, don't add new resources
                 weibo_id = row[0]
                 print "Weibo(id: %d) already exists. Overwriting" % (weibo_id)
-                db_cur.execute('''UPDATE weibo SET up_num=?,retweet_num=?,comment_num=? WHERE (publish_time=?) AND (weibo_content=?)''',
-                    (weibo["up_num"],weibo["retweet_num"],weibo["comment_num"], weibo["publish_time"], weibo["weibo_content"]))
+                if retweeted:
+                    self.db_cur.execute('''UPDATE retweet_weibo SET retweet_up_num=?,retweet_retweet_num=?,retweet_comment_num=? 
+                        WHERE retweet_weibo_id=?''',(weibo["up_num"],weibo["retweet_num"],weibo["comment_num"], weibo_id))
+                else:
+                    self.db_cur.execute('''UPDATE weibo SET up_num=?,retweet_num=?,comment_num=? WHERE weibo_id=?''',
+                        (weibo["up_num"],weibo["retweet_num"],weibo["comment_num"], weibo_id))
                 print "overwriting weibo(id: %d) in database" % weibo_id
                 if weibo["image_num"] > 0:
                     self.download_images(weibo["image_links"], str(weibo_id), img_dir_name)
                 if weibo["comment_num"] > 0:
                     self.write_comments(weibo, weibo_id, retweeted)
-            db_conn.commit()
+            self.db_conn.commit()
             return weibo_id
         except Exception, e:
             print "Error while writing weibo into database: ", e
             traceback.print_exc()
 
     def get_userid_from_db(self, address, retweeted):
-        db_conn, db_cur = self.get_db_cur(retweeted)
-        if db_cur == None:
+        if self.db_cur == None:
             return None
         try:
+            table_name = "retweet_author" if retweeted else "author"
             user_id = None
-            db_cur.execute('''SELECT author_id FROM author WHERE author_address=?''', (address,))
-            row = db_cur.fetchone()
+            self.db_cur.execute("SELECT author_id FROM " + table_name + " WHERE author_address=?", (address,))
+            row = self.db_cur.fetchone()
             if row:
                 user_id = row[0]
             return user_id
@@ -376,7 +396,6 @@ class Spider:
 
     def update_author(self, link, name, add_weibo, add_comment, retweeted, img_url=None):
         try:
-            db_conn, db_cur = self.get_db_cur(retweeted)
             if link.startswith("https://weibo.cn"):
                 link = link[16:]
             user_id = None
@@ -389,43 +408,51 @@ class Spider:
             if img_url == None:
                 profile = self.get_user_profile(user_id)
                 img_url = profile["img"]
-            db_cur.execute('''SELECT * FROM author WHERE author_id=?''', (user_id,))
-            row = db_cur.fetchone()
+
+            table_name = "retweet_author" if retweeted else "author"
+            self.db_cur.execute("SELECT * FROM " + table_name +  " WHERE author_id=?", (user_id,))
+            row = self.db_cur.fetchone()
             if row == None:
                 #insert new author entry
                 self.download_images([img_url], str(user_id), "author")
-                db_cur.execute('''INSERT INTO author (author_id,author_address,author_name,img_url,weibo_num,comment_num)
+                self.db_cur.execute("INSERT INTO " + table_name + ''' (author_id,author_address,author_name,img_url,weibo_num,comment_num)
                     VALUES(?,?,?,?,?,?)''', (user_id,user_address,name,img_url,add_weibo,add_comment))
                 print "insert new author infomation into database"
             else:
-                db_cur.execute('''UPDATE author SET author_address=?,author_name=?,weibo_num=?,comment_num=?
+                self.db_cur.execute("UPDATE " + table_name + ''' SET author_address=?,author_name=?,weibo_num=?,comment_num=?
                     WHERE author_id=?''', (user_address, name, row[4]+add_weibo, row[5]+add_comment, user_id))
                 print "update author infomation in database"
-            db_conn.commit()
+            self.db_conn.commit()
         except Exception, e:
             print "Error while updating author info in database: ", e
             traceback.print_exc()
 
-    def add_resource(self, url, title, weibo_id, retweeted):
+    def get_article_url(self, url):
         try:
-            is_article = False
-            url = "https" + url[4:]
+            if url.startswith("http://"):
+                url = "https" + url[4:]
             headers = requests.get(url, allow_redirects=False).headers
             if ("Location" in headers) and headers["Location"].find("/ttarticle") >= 0:
-                is_article = True
                 url = headers["Location"]
-                print "debug: Found article: " + url
+                return url
+            else:
+                return None
+        except Exception, e:
+            print "Error while get article url: ", e
+            traceback.print_exc()
+            return None
 
-            db_conn, db_cur = self.get_db_cur(retweeted)
-            db_cur.execute('''INSERT INTO resource (url,title,weibo_id)
-                    VALUES(?,?,?)''', (url, title, weibo_id))
+    def add_resource(self, url, title, weibo_id, retweeted):
+        try:
+            if retweeted:
+                self.db_cur.execute("INSERT INTO retweet_resource (url,title,retweet_weibo_id) VALUES(?,?,?)", (url, title, weibo_id))
+            else:
+                self.db_cur.execute("INSERT INTO resource (url,title,weibo_id) VALUES(?,?,?)", (url, title, weibo_id))
             #print "insert new resource into database"
-            db_conn.commit()
-            return is_article
+            self.db_conn.commit()
         except Exception, e:
             print "Error while adding resource into database: ", e
             traceback.print_exc()
-            return False
 
     def mkdirs(self):
         weibo_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep + "backup"
@@ -597,45 +624,41 @@ class Spider:
         copy_tree(src_dir+"css", dest_dir+"css")
         copy_tree(src_dir+"images", dest_dir+"images")
 
-    def get_db_cur(self, retweeted):
-        if retweeted:
-            db_cur = self.retweet_db_cur
-            db_conn = self.retweet_db_conn
-        else:
-            db_cur = self.db_cur
-            db_conn = self.db_conn
-        return db_conn, db_cur
-
-    def init_db(self, db_name):
-        db_file = self.base_dir + os.sep + "db" + os.sep + db_name
+    def init_db(self):
+        db_file = self.base_dir + os.sep + "db" + os.sep + "weibo.db"
         try:
-            db_conn = sqlite3.connect(db_file)
-            db_cur = db_conn.cursor()
-            db_cur.execute('''SELECT * FROM sqlite_master WHERE name ='user' and type='table';''')
-            if len(db_cur.fetchall()) == 0:
+            self.db_conn = sqlite3.connect(db_file)
+            self.db_cur = self.db_conn.cursor()
+            self.db_cur.execute('''SELECT * FROM sqlite_master WHERE name ='user' and type='table';''')
+            if len(self.db_cur.fetchall()) == 0:
                 print "create tables in local database"
-                db_cur.execute('''CREATE TABLE user (user_id INTEGER PRIMARY KEY NOT NULL, user_name TEXT NOT NULL, 
+                self.db_cur.execute('''CREATE TABLE user (user_id INTEGER PRIMARY KEY NOT NULL, user_name TEXT NOT NULL, 
                     followings INTEGER NOT NULL, followers INTEGER NOT NULL, weibo_num INTEGER NOT NULL);''')
-                db_cur.execute('''CREATE TABLE author (author_id INTEGER PRIMARY KEY NOT NULL, author_address TEXT, author_name TEXT NOT NULL,
+                self.db_cur.execute('''CREATE TABLE author (author_id INTEGER PRIMARY KEY NOT NULL, author_address TEXT, author_name TEXT NOT NULL,
                     img_url TEXT NOT NULL, weibo_num INTEGER NOT NULL, comment_num INTEGER NOT NULL);''')
-                db_cur.execute('''CREATE TABLE weibo (weibo_id INTEGER PRIMARY KEY, publish_time TEXT NOT NULL, author_id INTEGER NOT NULL, 
+                self.db_cur.execute('''CREATE TABLE weibo (weibo_id INTEGER PRIMARY KEY, publish_time TEXT NOT NULL, author_id INTEGER NOT NULL, 
                     author_name TEXT NOT NULL, image_num INTEGER NOT NULL, weibo_content TEXT NOT NULL, up_num INTEGER NOT NULL, retweet_num INTEGER NOT NULL, 
-                    comment_num INTEGER NOT NULL, resource_num INTEGER NOT NULL, is_article INTEGER NOT NULL, original_weibo INTEGER);''')
-                db_cur.execute('''CREATE TABLE resource (resource_id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,
+                    comment_num INTEGER NOT NULL, weibo_type INTEGER NOT NULL, original_weibo INTEGER);''')
+                self.db_cur.execute('''CREATE TABLE resource (resource_id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,
                     weibo_id INTEGER NOT NULL, FOREIGN KEY(weibo_id) REFERENCES weibo(weibo_id));''')
-                db_conn.commit()
-            return db_conn, db_cur
+
+
+                self.db_cur.execute('''CREATE TABLE retweet_weibo (retweet_weibo_id INTEGER PRIMARY KEY, retweet_publish_time TEXT NOT NULL, retweet_author_id INTEGER NOT NULL, 
+                    retweet_author_name TEXT NOT NULL, retweet_image_num INTEGER NOT NULL, retweet_weibo_content TEXT NOT NULL, retweet_up_num INTEGER NOT NULL, retweet_retweet_num INTEGER NOT NULL, 
+                    retweet_comment_num INTEGER NOT NULL, retweet_weibo_type INTEGER NOT NULL);''')
+                self.db_cur.execute('''CREATE TABLE retweet_author (author_id INTEGER PRIMARY KEY NOT NULL, author_address TEXT, author_name TEXT NOT NULL,
+                    img_url TEXT NOT NULL, weibo_num INTEGER NOT NULL, comment_num INTEGER NOT NULL);''')
+                self.db_cur.execute('''CREATE TABLE retweet_resource (resource_id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,
+                    retweet_weibo_id INTEGER NOT NULL, FOREIGN KEY(retweet_weibo_id) REFERENCES retweet_weibo(retweet_weibo_id));''')
+                self.db_conn.commit()
         except Exception, e:
             print "Error while init database: ", e
-            return None, None
     
     def clean_up(self):
         if self.comment_conn != None:
             self.comment_conn.close()
         if self.db_conn != None:
             self.db_conn.close()
-        if self.retweet_db_conn != None:
-            self.retweet_db_conn.close()
 
     # 运行爬虫
     def start(self):
@@ -646,9 +669,8 @@ class Spider:
                 return
             self.get_user_info()
             self.mkdirs()
-            self.db_conn, self.db_cur = self.init_db("original_weibo.db")
-            self.retweet_db_conn, self.retweet_db_cur = self.init_db("retweet_weibo.db")
-            if self.db_cur == None or self.retweet_db_cur == None:
+            self.init_db()
+            if self.db_cur == None or self.db_conn == None:
                 print "\nWeibo Backup Failed"
                 print "==========================================================================="
                 return
