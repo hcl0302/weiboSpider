@@ -591,16 +591,22 @@ class Spider:
     def init_interaction_db(self, year, month):
         try:
             db_file = self.base_dir + os.sep + "db" + os.sep + "%s.db" % year
+            self.comment_db_year = year
+            self.comment_db_month = month
+            self.comment_conn = sqlite3.connect(db_file)
+            self.comment_cur = self.comment_conn.cursor()
+            self.create_interaction_tables(month)
+        except Exception, e:
+            print "Error while init interaction databases: ", e
+
+    def create_interaction_tables(self, month):
+        try:
             comment_table = "comment_" + month
             retweeted_comment_table = "retweeted" + comment_table
             retweet_table = "retweet_" + month
             retweeted_retweet_table = "retweeted" + retweet_table
             thumbup_table = "thumbup_" + month
             retweeted_thumbup_table = "retweeted" + thumbup_table
-            self.comment_db_year = year
-            self.comment_db_month = month
-            self.comment_conn = sqlite3.connect(db_file)
-            self.comment_cur = self.comment_conn.cursor()
             self.comment_cur.execute("CREATE TABLE IF NOT EXISTS " + comment_table + ''' (id INTEGER PRIMARY KEY, author_link TEXT NOT NULL, 
                 author_name TEXT NOT NULL, content TEXT NOT NULL, date TEXT NOT NULL, weibo_id INTEGER NOT NULL);''')
             self.comment_cur.execute("CREATE TABLE IF NOT EXISTS " + retweeted_comment_table + ''' (id INTEGER PRIMARY KEY, author_link TEXT NOT NULL, 
@@ -615,7 +621,7 @@ class Spider:
                 author_name TEXT NOT NULL, date TEXT NOT NULL, weibo_id INTEGER NOT NULL);''')
             self.comment_conn.commit()
         except Exception, e:
-            print "Error while init interaction databases: ", e
+            print "Error while creating interaction tables: ", e
 
     def find_latest_saved_interaction(self, weibo_id, weibo_date, table_prefix, retweeted):
         table_name = table_prefix + weibo_date[5:7]
@@ -629,13 +635,8 @@ class Spider:
                 self.comment_conn.close()
                 self.init_interaction_db(weibo_date[0:4], weibo_date[5:7])
             elif self.comment_db_month != weibo_date[5:7]:
-                if table_prefix == "thumbup_":
-                    self.comment_cur.execute("CREATE TABLE IF NOT EXISTS " + table_name + ''' (id INTEGER PRIMARY KEY, author_link TEXT NOT NULL, 
-                        author_name TEXT NOT NULL, date TEXT NOT NULL, weibo_id INTEGER NOT NULL);''')
-                else:
-                    self.comment_cur.execute("CREATE TABLE IF NOT EXISTS " + table_name + ''' (id INTEGER PRIMARY KEY, author_link TEXT NOT NULL, 
-                        author_name TEXT NOT NULL, content TEXT NOT NULL, date TEXT NOT NULL, weibo_id INTEGER NOT NULL);''')
                 self.comment_db_month = weibo_date[5:7]
+                self.create_interaction_tables(self.comment_db_month)
             self.comment_cur.execute("SELECT date from " + table_name + " WHERE weibo_id=? ORDER BY date DESC LIMIT 1", (weibo_id,))
             row = self.comment_cur.fetchone()
             if row == None:
