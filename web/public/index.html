@@ -1,0 +1,136 @@
+<!doctype html>
+<html ng-app="weibo_summary">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/lightbox.css" rel="stylesheet">
+    <link href="css/style.css" rel="stylesheet">
+    <script src="js/jquery.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+    <script src="js/angular.js"></script>
+    <script src="js/lightbox.js"></script>
+    <script src="js/main.js"></script>
+    
+  </head>
+  <body style="background-color: #B4DAF0">
+    <div ng-controller="controller">
+      <div class="top-bar">
+        <div id="apptitle" class="col-md-3 col-xs-12">Weibo Search</div>
+        <div style="display:inline-block;" class="col-xs-12 col-md-9">
+          <form name="form" ng-submit="doSearch()">
+              <input class="form-control searchInput" type="text" ng-model="options.searchText" placeholder="type something...">
+              <button id="searchBtn" style="display:inline-block;" type="submit" class="btn btn-default searchBtn" aria-label="search"><span class="glyphicon glyphicon-search" aria-hidden="true"></span></button>
+              <button type="button" class="btn btn-default" id="clearBtn" ng-click="init()" class="btn btn-default" aria-label="clear">
+                <span class="glyphicon glyphicon-remove"></span>Clear
+              </button>
+              <button type="button" class="btn btn-default" ng-click="toggleOptions()"><span class="glyphicon glyphicon-chevron-down"></span>Advanced</button>
+              <button type="button" class="btn btn-default" style="margin-left: 15px;" ng-click="showRelationships()"><span class="glyphicon glyphicon-user"></span></button>
+              
+              <div ng-show="showOptions">
+                <div class="advanced-input">
+                  <label for="pageSize">每页微博数：</label>
+                  <input type="text" class="form-control" ng-model="options.pageSize" placeholder="20" style="width: 60px;">
+                  <label for="startDate">开始日期：</label>
+                  <input type="text" class="form-control" ng-model="options.startDate" placeholder="2017-01-01" style="width: 100px;">
+                  <label for="endDate">结束日期：</label>
+                  <input type="text" class="form-control" ng-model="options.endDate" placeholder="2017-11-02" style="width: 100px;">
+                </div>
+
+                <div class="advanced-input">
+                  <label style="margin-right: 10px;">微博类型: </label>
+                  <label class="radio-inline"><input type="radio" ng-model="options.weiboType", value="all">全部微博</label>
+                  <label class="radio-inline"><input type="radio" ng-model="options.weiboType", value="original">原创微博</label>
+                  <label class="radio-inline"><input type="radio" ng-model="options.weiboType", value="retweet">转发微博</label>
+                </div>
+
+                <div class="advanced-input">
+                  <label style="margin-right: 10px;">包含资源: </label>
+                  <label class="checkbox-inline">
+                    <input type="checkbox" ng-model="options.text"> 纯文字
+                  </label>
+                  <label class="checkbox-inline">
+                    <input type="checkbox" ng-model="options.photo"> 图片
+                  </label>
+                  <label class="checkbox-inline">
+                    <input type="checkbox" ng-model="options.article"> 文章
+                  </label>
+                  <label class="checkbox-inline">
+                    <input type="checkbox" ng-model="options.others"> 其他
+                  </label>
+                </div>
+              </div>
+
+          </form>
+        </div>
+      </div>
+
+      <div id="loader" ng-show="searching"></div>
+
+      <ul class="list-unstyled weibo-list" ng-if="currentWeiboPage && !searching">
+        <li class="weibo" ng-repeat="weibo in currentWeiboPage">
+          <h5>{{weibo.author_name}}</h5>
+          <p class="datetime">{{weibo.publish_time}}</p>
+          <p>{{weibo.weibo_content}}</p>
+          <p>
+            <span ng-repeat="image in weibo.images"><a href={{image}} data-lightbox={{weibo.weibo_id}}><img src={{image}}></a></span>
+          </p>
+          <div class="original-weibo" ng-if="weibo.original_weibo">
+            <p>@{{weibo.retweet_author_name}}</p>
+            <p>{{weibo.retweet_weibo_content}}</p>
+            <p>
+              <span ng-repeat="image in weibo.retweet_images"><a href={{image}} data-lightbox={{weibo.retweet_weibo_id}}><img src={{image}}></a></span>
+            </p>
+            <p class="datetime">{{weibo.retweet_publish_time}}</p>
+            <div class="btn-group" role="group" aria-label="...">
+              <button type="button" class="btn btn-default btn-xs" aria-label="Forward" ng-click="getComments(weibo, true, 'retweet')">
+                <span class="glyphicon glyphicon-new-window" aria-hidden="true"></span>{{weibo.retweet_retweet_num}}</button>
+              <button type="button" class="btn btn-default btn-xs" aria-label="Comment" ng-click="getComments(weibo, true, 'comment')">
+                <span class="glyphicon glyphicon-comment" aria-hidden="true"></span>{{weibo.retweet_comment_num}}</button>
+              <button type="button" class="btn btn-default btn-xs" aria-label="Thumbsup" ng-click="getComments(weibo, true, 'thumbup')">
+                <span class="glyphicon glyphicon-thumbs-up" aria-hidden="true"></span>{{weibo.retweet_up_num}}</button>
+            </div>
+          </div>
+
+
+          <div class="btn-group btn-group-sm" role="group" aria-label="...">
+            <button type="button" class="btn btn-default weibo-btn" aria-label="Favorite">
+              <span class="glyphicon glyphicon glyphicon-star-empty" aria-hidden="true"></span>Favorite
+            </button>
+            <button type="button" class="btn btn-default weibo-btn" aria-label="Forward" ng-click="getComments(weibo, false, 'retweet')">
+              <span class="glyphicon glyphicon-new-window" aria-hidden="true"></span>{{weibo.retweet_num}}</button>
+            <button type="button" class="btn btn-default weibo-btn" aria-label="Comment" ng-click="getComments(weibo, false, 'comment')">
+              <span class="glyphicon glyphicon-comment" aria-hidden="true"></span>{{weibo.comment_num}}</button>
+            <button type="button" class="btn btn-default weibo-btn" aria-label="Thumbsup" ng-click="getComments(weibo, false, 'thumbup')">
+              <span class="glyphicon glyphicon-thumbs-up" aria-hidden="true"></span>{{weibo.up_num}}</button>
+          </div>
+        </li>
+
+      </ul>
+
+      <!-- pager -->
+      <div ng-show="!searching && pager.pages.length" style="text-align: center">
+        <ul class="pagination">
+            <li ng-class="{disabled:pager.currentPage === 1}">
+                <a ng-click="setPage(1)">First</a>
+            </li>
+            <li ng-class="{disabled:pager.currentPage === 1}">
+                <a ng-click="setPage(pager.currentPage - 1)">Previous</a>
+            </li>
+            <li ng-repeat="page in pager.pages" ng-class="{active:pager.currentPage === page}">
+                <a ng-click="setPage(page)">{{page}}</a>
+            </li>               
+            <li ng-class="{disabled:pager.currentPage === pager.totalPages}">
+                <a ng-click="setPage(pager.currentPage + 1)">Next</a>
+            </li>
+            <li ng-class="{disabled:pager.currentPage === pager.totalPages}">
+                <a ng-click="setPage(pager.totalPages)">Last</a>
+            </li>
+        </ul>
+      </div>
+
+      
+    </div>
+  </body>
+</html>

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" type="text/css" href="css/relationship.css">
+<meta charset="UTF-8">
+<title>Relationship</title>
+</head>
+<body>
+
+<h1 class="mycenter">Relationships</h1>
+
+<div id="author_list">
+  <p class="mycenter"><input class="search" placeholder="Search by keyword or date" /></p>
+  <p class="mycenter">
+    <button class="sort" data-sort="weibo_num">
+      按被转发微博数排序
+    </button>
+    <button class="sort" data-sort="up_num">
+      按点赞数排序
+    </button>
+    <button class="sort" data-sort="retweet_num">
+      按转发你微博数排序
+    </button>
+    <button class="sort" data-sort="comment_num">
+      按评论数排序
+    </button>
+  </p>
+  <div id="loader"></div>
+  <div class="headers">
+    <span class="header">昵称</span><span class="header">被转发微博数</span><span class="header">点赞数</span><span class="header">转发你微博数</span><span class="header">评论数</span>
+  </div>
+  <ul class="list" style="text-align: center;"></ul>
+</div>
+<script src="js/jquery.js"></script>
+<script src="js/list.js"></script>
+<script src="js/relationship_script.js"></script>
+</body>
+
+</html>
