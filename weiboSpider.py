@@ -20,19 +20,19 @@ import sqlite3
 class Spider:
 
     def __init__(self, user_address, cookie, wait_time, mode, overwriting, download_options, start_date = "", end_date = ""):
-        self.max_page = 9999999 #deprecated
+        self.max_page = 99999999 #deprecated
         self.wait_time = wait_time
         self.start_date = start_date
         self.end_date = end_date
         self.overwriting = overwriting
         self.mode = mode
 
-        self.download_weibo_comments = download_options[0]
-        self.download_forwarded_weibo_comments = download_options[1]
-        self.download_weibo_forwarding = download_options[2]
-        self.download_forwarded_weibo_forwarding = download_options[3]
-        self.download_weibo_thumbup = download_options[4]
-        self.download_forwarded_weibo_thumbup = download_options[5]
+        self.download_weibo_comments_max = download_options[0]
+        self.download_forwarded_weibo_comments_max = download_options[1]
+        self.download_weibo_forwarding_max = download_options[2]
+        self.download_forwarded_weibo_forwarding_max = download_options[3]
+        self.download_weibo_thumbup_max = download_options[4]
+        self.download_forwarded_weibo_thumbup_max = download_options[5]
 
         #self.cookies = cookies
         #print self.cookies
@@ -208,7 +208,7 @@ class Spider:
     def get_weibo_from_html(self, url, is_original_weibo, retweet_publish_time=""):
         pattern = r"\d+\.?\d*"
 
-        new_weibo = {"publish_time":"", "author_name":"", "author_link":"", "weibo_content":"", "image_num":0, "up_num":0,
+        new_weibo = {"publish_time":"", "author_name":"", "author_link":"", "weibo_content":"", "image_num":0, "up_num":0,"up_url":None,
              "retweet_num":0, "comment_num":0, "weibo_type":1, "resource_links":{}, "original_weibo": None}
 
         html = requests.get(url,cookies=self.cookie).content
@@ -271,6 +271,8 @@ class Spider:
         str_infos = selector.xpath("//div/span/a")
         for str_info in str_infos:
             if str_info.attrib["href"].startswith("/attitude/"):
+                if new_weibo["up_url"] != None:
+                    continue
                 str_zan = str_info.text
                 guid = re.findall(pattern, str_zan, re.M)
                 if len(guid) > 0:
@@ -676,10 +678,13 @@ class Spider:
                         print "Found old comments already exist. Skip"
                         return comments
                     comments.append(comment)
+            if (comments and self.download_forwarded_weibo_comments_max <= len(comments)) or (not retweeted and self.download_weibo_comments_max <= len(comments)):
+                print "comments of this weibo has reached max number, skip the rests"
+                return comments
         return comments
 
     def write_comments(self, weibo, weibo_id, retweeted):
-        if (retweeted and not self.download_forwarded_weibo_comments) or (not retweeted and not self.download_weibo_comments):
+        if (retweeted and self.download_forwarded_weibo_comments_max == 0) or (not retweeted and self.download_weibo_comments_max == 0):
             return
         
         weibo_date = weibo["publish_time"]
@@ -744,10 +749,13 @@ class Spider:
                         print "Found old forwardings already exist. Skip"
                         return retweets
                     retweets.append(retweet)
+            if (retweeted and self.download_forwarded_weibo_forwarding_max <= len(retweets)) or (not retweeted and self.download_weibo_forwarding_max <= len(retweets)):
+                print "forwardings of this weibo has reached max number, skip the rests"
+                return retweets
         return retweets
 
     def write_retweets(self, weibo, weibo_id, retweeted):
-        if (retweeted and not self.download_forwarded_weibo_forwarding) or (not retweeted and not self.download_weibo_forwarding):
+        if (retweeted and self.download_forwarded_weibo_forwarding_max == 0) or (not retweeted and not self.download_weibo_forwarding_max == 0):
             return
         
         weibo_date = weibo["publish_time"]
@@ -807,10 +815,14 @@ class Spider:
                         print "Found old thumbups already exist. Skip"
                         return thumbups
                     thumbups.append(thumbup)
+            if (retweeted and self.download_forwarded_weibo_thumbup_max <= len(thumbups)) or (not retweeted and self.download_weibo_thumbup_max <= len(thumbups)):
+                print "thumbups of this weibo has reached max number, skip the rests"
+                return thumbups
+
         return thumbups
 
     def write_thumbups(self, weibo, weibo_id, retweeted):
-        if (retweeted and not self.download_forwarded_weibo_thumbup) or (not retweeted and not self.download_weibo_thumbup):
+        if (retweeted and self.download_forwarded_weibo_thumbup_max == 0) or (not retweeted and self.download_weibo_thumbup_max == 0):
             return
         
         weibo_date = weibo["publish_time"]
@@ -872,16 +884,14 @@ def main():
         overwriting = config.getint('mode', 'overwriting')
         overwriting = False if overwriting==0 else True
 
-        download_weibo_comments = config.getint('comments', 'download_weibo_comments')
-        download_forwarded_weibo_comments = config.getint('comments', 'download_forwarded_weibo_comments')
-        download_weibo_forwarding = config.getint('forwarding', 'download_weibo_forwarding')
-        download_forwarded_weibo_forwarding = config.getint('forwarding', 'download_forwarded_weibo_forwarding')
-        download_weibo_thumbup = config.getint('thumbup', 'download_weibo_thumbup')
-        download_forwarded_weibo_thumbup = config.getint('thumbup', 'download_forwarded_weibo_thumbup')
-        download_options = [download_weibo_comments, download_forwarded_weibo_comments, download_weibo_forwarding,
-                            download_forwarded_weibo_forwarding,download_weibo_thumbup,download_forwarded_weibo_thumbup]
-        for i in range(0,len(download_options)):
-            download_options[i] = False if download_options[i]==0 else True
+        download_weibo_comments_max = config.getint('comments', 'download_weibo_comments_max')
+        download_forwarded_weibo_comments_max = config.getint('comments', 'download_forwarded_weibo_comments_max')
+        download_weibo_forwarding_max = config.getint('forwarding', 'download_weibo_forwarding_max')
+        download_forwarded_weibo_forwarding_max = config.getint('forwarding', 'download_forwarded_weibo_forwarding_max')
+        download_weibo_thumbup_max = config.getint('thumbup', 'download_weibo_thumbup_max')
+        download_forwarded_weibo_thumbup_max = config.getint('thumbup', 'download_forwarded_weibo_thumbup_max')
+        download_options = [download_weibo_comments_max, download_forwarded_weibo_comments_max, download_weibo_forwarding_max,
+                            download_forwarded_weibo_forwarding_max,download_weibo_thumbup_max,download_forwarded_weibo_thumbup_max]
 
         if mode == 1:
             print "mode=%d: [Update Mode]" % mode

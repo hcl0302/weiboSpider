@@ -35,12 +35,11 @@ angular.module('weibo_summary', []).controller('controller', function($scope, $h
     $scope.doSearch = function() {
         $scope.searching = true;
         $scope.showOptions = false;
-        var url = "http://127.0.0.1:8081/weibo";
         $scope.pageSize = $scope.options.pageSize;
 
         $http({
             method: 'POST',
-            url: 'http://127.0.0.1:8081/weibo',
+            url: '/weibo',
             data: $scope.options
         }).then(function successCallback(response){
             var data = angular.fromJson(response).data;
@@ -87,7 +86,7 @@ angular.module('weibo_summary', []).controller('controller', function($scope, $h
 
         $http({
             method: 'POST',
-            url: 'http://127.0.0.1:8081/page',
+            url: '/page',
             data: {
                 page: page,
                 lastWeiboId: lastWeiboId,
@@ -180,13 +179,13 @@ angular.module('weibo_summary', []).controller('controller', function($scope, $h
             weibo_id = weibo.weibo_id;
         }
         retweet = retweet? 1:0;
-        let url = "http://127.0.0.1:8081/comments.html?id=" + weibo_id + "&year=" + year + "&month=" + month + "&retweet=" + retweet + "&title=" + title;
+        let url = "/comments.html?id=" + weibo_id + "&year=" + year + "&month=" + month + "&retweet=" + retweet + "&title=" + title;
         console.log(url);
         window.open(url, '_blank');
     }
 
     $scope.showRelationships = function() {
-        window.open("http://127.0.0.1:8081/relationship.html", '_blank');
+        window.open("/relationship.html", '_blank');
     }
 
     $scope.doSearch();

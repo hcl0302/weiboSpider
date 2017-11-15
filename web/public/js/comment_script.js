@@ -36,7 +36,7 @@ $( document ).ready(function() {
             item: '<li><span class="name"></span><span class="time"></span></li>'
         };
     }
-    $.getJSON( "http://127.0.0.1:8081/interaction?id=" + id + "&year=" + year + "&month=" + month + "&retweet=" + retweet + "&title=" + title, function( data ) {
+    $.getJSON( "/interaction?id=" + id + "&year=" + year + "&month=" + month + "&retweet=" + retweet + "&title=" + title, function( data ) {
         console.log(data);
         var comments = [];
         if (title == "thumbup") {

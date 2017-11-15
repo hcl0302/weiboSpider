@@ -6,7 +6,7 @@ var options = {
 
 $( document ).ready(function() {
 
-    $.getJSON( "http://127.0.0.1:8081/relationships", function( data ) {
+    $.getJSON( "/relationships", function( data ) {
         console.log(data);
         var authors = [];
         data.forEach(function(author){
